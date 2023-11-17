@@ -13,6 +13,9 @@
 # limitations under the License.
 #Requires -RunAsAdministrator
 
+# Don't show progress bar to speed up Invoke-WebRequest Download
+$ProgressPreference = 'SilentlyContinue'
+
 $START_CONTAINER = ''
 
 # Exit early if run as non-root user
@@ -26,15 +29,69 @@ if (Test-Path -Path ".\timesketch") {
     exit
 }
 
+# Check to see if appropriate Windows features are install
+$RestartNeeded = $false
+$Hypervisor = Get-WindowsOptionalFeature -Online -FeatureName HypervisorPlatform | Select-Object -Property State -ExpandProperty State
+$VirtualMachine = Get-WindowsOptionalFeature -Online -FeatureName VirtualMachinePlatform | Select-Object -Property State -ExpandProperty State
+if($Hypervisor -eq "Enabled") {
+    Write-Output "[+] Windows Hypervisor Platform is enabled"
+}
+else {
+    Write-Output "[-] Install Windows Hypervisor Platform..."
+    $Result = Enable-WindowsOptionalFeature -Online -FeatureName HypervisorPlatform -All
+    if($?) {
+        Write-Output "[+] Windows Hypervisor Platform successfully installed!"
+        $RestartNeeded = $true
+    }
+    else {
+        Write-Output "Error: Windows Hypervisor Platform could not be installed.  Exiting"
+        exit
+    }
+}
+if($VirtualMachine -eq "Enabled") {
+    Write-Output "[+] Windows Virtual Machine Platform is enabled"
+}
+else {
+    Write-Output "[-] Installing Windows Virtual Machine Platform..."
+    $Result = Enable-WindowsOptionalFeature -Online -FeatureName VirtualMachinePlatform -All
+    if($?) {
+        Write-Output "[+] Windows Virtual Machine Platform successfully installed!"
+        $RestartNeeded = $true
+    }
+    else {
+        Write-Output "Error: Windows Virtual Machine Platform could not be instaled.  Exiting"
+        exit
+    }
+}
+
+# Check to see if a restart is needed
+if($RestartNeeded) {
+    Write-Output "Please restart your computer and rerun this script to continue"
+    exit
+}
+
 # Check to see if WSL is installed, if not install it
 $WSL = wsl --status
 if ($WSL -eq 0) {
     Write-Output "[+] Installing Windows WSL2..."
     wsl --install
-    Write-Output "[+] Windows WSL2 is installed!"
+    if($?) {
+        Write-Output "[+] Windows WSL2 is installed!"
+    }
+    else {
+        Write-Output "Error: The script was unable to install WSL2. Exiting."
+        exit
+    }
 }
 else {
     Write-Output "[+] Windows WSL2 is installed!"
+    $RestartNeeded = $true
+}
+
+# Check to see if a restart is needed
+if($RestartNeeded) {
+    Write-Output "Please restart your computer and rerun this script to continue"
+    exit
 }
 
 # Function to get Cryptopgraphically random alphanumeric characters
@@ -86,9 +143,11 @@ if ((Test-CommandExists docker) -eq "docker does not exist") {
 
 $SERVICE = "com.docker.service"
 $arrService = Get-Service -Name $SERVICE
+Start-Sleep -s 60
 if ($arrService.Status -ne 'Running') {
     Write-Output "[-] Docker service not started.  Starting service..."
     Start-Service $SERVICE
+    Start-Sleep -s 60
 }
 if ($arrService.Status -eq 'Running') {
     Write-Output "[+] Docker service started"
@@ -184,9 +243,7 @@ $POSTGRES_PORT=5432
 $SECRET_KEY=Get-RandomString -length 32
 $OPENSEARCH_ADDRESS="opensearch"
 $OPENSEARCH_PORT=9200
-get-wmiobject -class "Win32_ComputerSystem"
-$OPENSEARCH_MEM_USE_GB = [math]::Ceiling($cs.TotalPhysicalMemory / 1024 / 1024 / 1024)/2
-#$OPENSEARCH_MEM_USE_GB=$(cat /proc/meminfo | grep MemTotal | awk '{printf "%.0f", ($2 / (1024 * 1024) / 2)}')
+$OPENSEARCH_MEM_USE_GB = (Get-CimInstance Win32_PhysicalMemory | Measure-Object -Property capacity -Sum).sum /1gb / 2
 $REDIS_ADDRESS="redis"
 $REDIS_PORT=6379
 $GITHUB_BASE_URL="https://raw.githubusercontent.com/google/timesketch/master"
@@ -202,11 +259,12 @@ Write-Host "* Fetching configuration files.."
 (Invoke-webrequest -URI $GITHUB_BASE_URL/data/tags.yaml).Content | out-file timesketch\etc\timesketch\tags.yaml -encoding ascii
 (Invoke-webrequest -URI $GITHUB_BASE_URL/data/plaso.mappings).Content | out-file timesketch\etc\timesketch\plaso.mappings -encoding ascii
 (Invoke-webrequest -URI $GITHUB_BASE_URL/data/generic.mappings).Content | out-file timesketch\etc\timesketch\generic.mappings -encoding ascii
-(Invoke-webrequest -URI $GITHUB_BASE_URL/data/features.yaml).Content | out-file timesketch\etc\timesketch\features.yaml -encoding ascii
+(Invoke-webrequest -URI $GITHUB_BASE_URL/data/context_links.yaml).Content | out-file timesketch\etc\timesketch\context_links.yaml -encoding ascii
+(Invoke-webrequest -URI $GITHUB_BASE_URL/data/regex_features.yaml).Content | out-file timesketch\etc\timesketch\regex_features.yaml -encoding UTF8NoBOM
+(Invoke-webrequest -URI $GITHUB_BASE_URL/data/winevt_features.yaml).Content | out-file timesketch\etc\timesketch\winevt_features.yaml -encoding UTF8NoBOM
 (Invoke-webrequest -URI $GITHUB_BASE_URL/data/ontology.yaml).Content | out-file timesketch\etc\timesketch\ontology.yaml -encoding ascii
 (Invoke-webrequest -URI $GITHUB_BASE_URL/data/intelligence_tag_metadata.yaml).Content | out-file timesketch\etc\timesketch\intelligence_tag_metadata.yaml -encoding ascii
 (Invoke-webrequest -URI $GITHUB_BASE_URL/data/sigma_config.yaml).Content | out-file timesketch\etc\timesketch\sigma_config.yaml -encoding ascii
-(Invoke-webrequest -URI $GITHUB_BASE_URL/data/sigma_rule_status.csv).Content | out-file timesketch\etc\timesketch\sigma_rule_status.csv -encoding ascii
 (Invoke-webrequest -URI $GITHUB_BASE_URL/data/sigma/rules/lnx_susp_zmap.yml).Content | out-file timesketch\etc\timesketch\sigma\rules\lnx_susp_zmap.yml -encoding ascii
 (Invoke-webrequest -URI $GITHUB_BASE_URL/contrib/nginx.conf).Content | out-file timesketch\etc\nginx.conf -encoding ascii
 Write-Host "OK"
@@ -218,8 +276,8 @@ $convfenv = 'timesketch\config.env'
 (Get-Content $timesketchconf).replace("SECRET_KEY = '<KEY_GOES_HERE>'", "SECRET_KEY = '$SECRET_KEY'") | Set-Content $timesketchconf
 
 # Set up the OpenSearch connection
-(Get-Content $timesketchconf).replace("ELASTIC_HOST = '127.0.0.1'", "ELASTIC_HOST = '$OPENSEARCH_ADDRESS'") | Set-Content $timesketchconf
-(Get-Content $timesketchconf).replace("ELASTIC_PORT = 9200", "ELASTIC_PORT = $OPENSEARCH_PORT") | Set-Content $timesketchconf
+(Get-Content $timesketchconf).replace("OPENSEARCH_HOST = '127.0.0.1'", "OPENSEARCH_HOST = '$OPENSEARCH_ADDRESS'") | Set-Content $timesketchconf
+(Get-Content $timesketchconf).replace("OPENSEARCH_PORT = 9200", "OPENSEARCH_PORT = $OPENSEARCH_PORT") | Set-Content $timesketchconf
 
 # Set up the Redis connection
 (Get-Content $timesketchconf).replace("UPLOAD_ENABLED = False", "UPLOAD_ENABLED = True") | Set-Content $timesketchconf
