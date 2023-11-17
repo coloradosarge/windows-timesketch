@@ -71,12 +71,13 @@ if($RestartNeeded) {
 }
 
 # Check to see if WSL is installed, if not install it
-$WSL = wsl --status
-if ($WSL -eq 0) {
+$WSL = Get-WindowsOptionalFeature -Online -FeatureName Microsoft-Windows-Subsystem-Linux | Select-Object -Property State -ExpandProperty State
+if ($WSL -ne "Enabled") {
     Write-Output "[+] Installing Windows WSL2..."
-    wsl --install
+    wsl --install --no-distribution
     if($?) {
         Write-Output "[+] Windows WSL2 is installed!"
+        $RestartNeeded = $true
     }
     else {
         Write-Output "Error: The script was unable to install WSL2. Exiting."
@@ -85,7 +86,6 @@ if ($WSL -eq 0) {
 }
 else {
     Write-Output "[+] Windows WSL2 is installed!"
-    $RestartNeeded = $true
 }
 
 # Check to see if a restart is needed
@@ -143,12 +143,12 @@ if ((Test-CommandExists docker) -eq "docker does not exist") {
 
 $SERVICE = "com.docker.service"
 $arrService = Get-Service -Name $SERVICE
-Start-Sleep -s 60
 if ($arrService.Status -ne 'Running') {
     Write-Output "[-] Docker service not started.  Starting service..."
     Start-Service $SERVICE
-    Start-Sleep -s 60
+    Start-Sleep -s 20
 }
+$arrService = Get-Service -Name $SERVICE
 if ($arrService.Status -eq 'Running') {
     Write-Output "[+] Docker service started"
 }
@@ -170,7 +170,7 @@ $CHECK_PS = Get-Process $DOCKER_PS -ErrorAction SilentlyContinue
 if(!$CHECK_PS) {
     Write-Output "[-] Docker Desktop is not running. Starting Docker Desktop..."
     Start-Process -FilePath "C:\Program Files\Docker\Docker\frontend\Docker Desktop.exe"
-    Start-Sleep -s 10
+    Start-Sleep -s 60
     $CHECK_PS = Get-Process $DOCKER_PS -ErrorAction SilentlyContinue
     if($CHECK_PS) {
         Write-Output "[+] Docker Desktop successfully started"
@@ -243,7 +243,7 @@ $POSTGRES_PORT=5432
 $SECRET_KEY=Get-RandomString -length 32
 $OPENSEARCH_ADDRESS="opensearch"
 $OPENSEARCH_PORT=9200
-$OPENSEARCH_MEM_USE_GB = (Get-CimInstance Win32_PhysicalMemory | Measure-Object -Property capacity -Sum).sum /1gb / 2
+$OPENSEARCH_MEM_USE_GB = (Get-CimInstance Win32_PhysicalMemory | Measure-Object -Property capacity -Sum).sum /1gb / 4
 $REDIS_ADDRESS="redis"
 $REDIS_PORT=6379
 $GITHUB_BASE_URL="https://raw.githubusercontent.com/google/timesketch/master"
@@ -260,8 +260,8 @@ Write-Host "* Fetching configuration files.."
 (Invoke-webrequest -URI $GITHUB_BASE_URL/data/plaso.mappings).Content | out-file timesketch\etc\timesketch\plaso.mappings -encoding ascii
 (Invoke-webrequest -URI $GITHUB_BASE_URL/data/generic.mappings).Content | out-file timesketch\etc\timesketch\generic.mappings -encoding ascii
 (Invoke-webrequest -URI $GITHUB_BASE_URL/data/context_links.yaml).Content | out-file timesketch\etc\timesketch\context_links.yaml -encoding ascii
-(Invoke-webrequest -URI $GITHUB_BASE_URL/data/regex_features.yaml).Content | out-file timesketch\etc\timesketch\regex_features.yaml -encoding UTF8NoBOM
-(Invoke-webrequest -URI $GITHUB_BASE_URL/data/winevt_features.yaml).Content | out-file timesketch\etc\timesketch\winevt_features.yaml -encoding UTF8NoBOM
+(Invoke-webrequest -URI $GITHUB_BASE_URL/data/regex_features.yaml).Content | out-file timesketch\etc\timesketch\regex_features.yaml -encoding ascii
+(Invoke-webrequest -URI $GITHUB_BASE_URL/data/winevt_features.yaml).Content | out-file timesketch\etc\timesketch\winevt_features.yaml -encoding ascii
 (Invoke-webrequest -URI $GITHUB_BASE_URL/data/ontology.yaml).Content | out-file timesketch\etc\timesketch\ontology.yaml -encoding ascii
 (Invoke-webrequest -URI $GITHUB_BASE_URL/data/intelligence_tag_metadata.yaml).Content | out-file timesketch\etc\timesketch\intelligence_tag_metadata.yaml -encoding ascii
 (Invoke-webrequest -URI $GITHUB_BASE_URL/data/sigma_config.yaml).Content | out-file timesketch\etc\timesketch\sigma_config.yaml -encoding ascii
@@ -301,8 +301,8 @@ Write-Host "--"
 Write-Host "--"
 Write-Host "Start the system:"
 Write-Host "1. cd timesketch"
-Write-Host "2. docker compose up -d"
-Write-Host "3. docker compose exec timesketch-web tsctl create-user <USERNAME>"
+Write-Host "2. docker-compose up -d"
+Write-Host "3. docker-compose exec timesketch-web tsctl create-user <USERNAME>"
 Write-Host "--"
 Write-Host "WARNING: The server is running without encryption."
 Write-Host "Follow the instructions to enable SSL to secure the communications:"
